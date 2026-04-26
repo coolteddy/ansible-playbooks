@@ -1,0 +1,120 @@
+---
+- name: Create Multipass VMs
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Write cloud-init with SSH public key
+      copy:
+        dest: /tmp/k8s-cloud-init.yml
+        content: |
+          #cloud-config
+          ssh_authorized_keys:
+            - {{ lookup('file', ssh_public_key_path) }}
+
+    - name: Create master VM
+      command: >
+        multipass launch {{ ubuntu_version }}
+        --name {{ cluster_name }}-master
+        --cpus {{ node_cpu }}
+        --memory {{ node_memory }}
+        --disk {{ node_disk }}
+        --cloud-init /tmp/k8s-cloud-init.yml
+      register: master_launch
+      failed_when: master_launch.rc != 0 and 'already exists' not in master_launch.stderr
+      changed_when: master_launch.rc == 0
+
+    - name: Create worker VMs
+      command: >
+        multipass launch {{ ubuntu_version }}
+        --name {{ cluster_name }}-worker{{ item }}
+        --cpus {{ node_cpu }}
+        --memory {{ node_memory }}
+        --disk {{ node_disk }}
+        --cloud-init /tmp/k8s-cloud-init.yml
+      loop: "{{ range(1, num_workers + 1) | list }}"
+      register: worker_launch
+      failed_when: worker_launch.rc != 0 and 'already exists' not in worker_launch.stderr
+      changed_when: worker_launch.rc == 0
+      when: num_workers > 0
+
+    - name: Get master IP
+      command: multipass info {{ cluster_name }}-master --format json
+      register: master_info_raw
+
+    - name: Set master IP fact
+      set_fact:
+        master_ip: "{{ (master_info_raw.stdout | from_json).info[cluster_name + '-master'].ipv4[0] }}"
+
+    - name: Get worker IPs
+      command: multipass info {{ cluster_name }}-worker{{ item }} --format json
+      loop: "{{ range(1, num_workers + 1) | list }}"
+      register: worker_infos_raw
+      when: num_workers > 0
+
+    - name: Add master to in-memory inventory
+      add_host:
+        name: "{{ master_ip }}"
+        groups: masters
+        ansible_user: ubuntu
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Add workers to in-memory inventory
+      add_host:
+        name: "{{ (item.stdout | from_json).info[cluster_name + '-worker' + (idx + 1) | string].ipv4[0] }}"
+        groups: workers
+        ansible_user: ubuntu
+        ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      loop: "{{ worker_infos_raw.results | default([]) }}"
+      loop_control:
+        index_var: idx
+      when: num_workers > 0
+
+    - name: Wait for master SSH to be ready
+      wait_for:
+        host: "{{ master_ip }}"
+        port: 22
+        timeout: 120
+
+    - name: Wait for worker SSH to be ready
+      wait_for:
+        host: "{{ (item.stdout | from_json).info[cluster_name + '-worker' + (idx + 1) | string].ipv4[0] }}"
+        port: 22
+        timeout: 120
+      loop: "{{ worker_infos_raw.results | default([]) }}"
+      loop_control:
+        index_var: idx
+      when: num_workers > 0
+
+- name: Common node setup
+  hosts: masters:workers
+  become: true
+  roles:
+    - common
+
+- name: Initialize control plane
+  hosts: masters
+  become: true
+  roles:
+    - control_plane
+
+- name: Join workers to cluster
+  hosts: workers
+  become: true
+  roles:
+    - worker
+  when: groups['workers'] | default([]) | length > 0
+
+- name: Fetch kubeconfig to host
+  hosts: masters
+  tasks:
+    - name: Fetch admin.conf
+      fetch:
+        src: /home/ubuntu/.kube/config
+        dest: "~/.kube/{{ cluster_name }}-config"
+        flat: true
+
+    - name: Show kubeconfig path
+      debug:
+        msg: "Kubeconfig saved to ~/.kube/{{ cluster_name }}-config — run: export KUBECONFIG=~/.kube/{{ cluster_name }}-config"

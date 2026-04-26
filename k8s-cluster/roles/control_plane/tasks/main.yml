@@ -1,0 +1,45 @@
+---
+- name: Initialize cluster with kubeadm
+  command: kubeadm init --pod-network-cidr={{ pod_cidr }}
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Create .kube directory for ubuntu user
+  file:
+    path: /home/ubuntu/.kube
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0700"
+
+- name: Copy admin.conf to ubuntu user kubeconfig
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/ubuntu/.kube/config
+    remote_src: true
+    owner: ubuntu
+    group: ubuntu
+    mode: "0600"
+
+- name: Install Calico CNI
+  become: false
+  command: >
+    kubectl apply -f
+    https://raw.githubusercontent.com/projectcalico/calico/v{{ calico_version }}/manifests/calico.yaml
+
+- name: Wait for Calico pods to be ready
+  become: false
+  command: >
+    kubectl wait pod
+    -l k8s-app=calico-node
+    -n kube-system
+    --for=condition=Ready
+    --timeout=180s
+
+- name: Generate join command
+  command: kubeadm token create --print-join-command
+  register: join_command_raw
+
+- name: Store join command as fact (accessible to worker play via hostvars)
+  set_fact:
+    k8s_join_command: "{{ join_command_raw.stdout }}"
