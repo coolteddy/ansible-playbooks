@@ -8,8 +8,8 @@ node_disk: 20G
 ubuntu_version: "22.04"
 
 # SSH key paths (used for cloud-init injection and Ansible SSH)
-ssh_public_key_path: "~/.ssh/id_rsa.pub"
-ssh_private_key_path: "~/.ssh/id_rsa"
+ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+ssh_private_key_path: "~/.ssh/id_ed25519"
 
 # Kubernetes
 k8s_version: "1.33"

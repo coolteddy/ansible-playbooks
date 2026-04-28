@@ -5,7 +5,7 @@
   tasks:
     - name: Write cloud-init with SSH public key
       copy:
-        dest: /tmp/k8s-cloud-init.yml
+        dest: "~/k8s-cloud-init.yml"
         content: |
           #cloud-config
           ssh_authorized_keys:
@@ -18,7 +18,7 @@
         --cpus {{ node_cpu }}
         --memory {{ node_memory }}
         --disk {{ node_disk }}
-        --cloud-init /tmp/k8s-cloud-init.yml
+        --cloud-init ~/k8s-cloud-init.yml
       register: master_launch
       failed_when: master_launch.rc != 0 and 'already exists' not in master_launch.stderr
       changed_when: master_launch.rc == 0
@@ -30,12 +30,12 @@
         --cpus {{ node_cpu }}
         --memory {{ node_memory }}
         --disk {{ node_disk }}
-        --cloud-init /tmp/k8s-cloud-init.yml
-      loop: "{{ range(1, num_workers + 1) | list }}"
+        --cloud-init ~/k8s-cloud-init.yml
+      loop: "{{ range(1, num_workers | int + 1) | list }}"
       register: worker_launch
       failed_when: worker_launch.rc != 0 and 'already exists' not in worker_launch.stderr
       changed_when: worker_launch.rc == 0
-      when: num_workers > 0
+      when: num_workers | int > 0
 
     - name: Get master IP
       command: multipass info {{ cluster_name }}-master --format json
@@ -47,9 +47,9 @@
 
     - name: Get worker IPs
       command: multipass info {{ cluster_name }}-worker{{ item }} --format json
-      loop: "{{ range(1, num_workers + 1) | list }}"
+      loop: "{{ range(1, num_workers | int + 1) | list }}"
       register: worker_infos_raw
-      when: num_workers > 0
+      when: num_workers | int > 0
 
     - name: Add master to in-memory inventory
       add_host:
@@ -69,7 +69,7 @@
       loop: "{{ worker_infos_raw.results | default([]) }}"
       loop_control:
         index_var: idx
-      when: num_workers > 0
+      when: num_workers | int > 0
 
     - name: Wait for master SSH to be ready
       wait_for:
@@ -85,7 +85,7 @@
       loop: "{{ worker_infos_raw.results | default([]) }}"
       loop_control:
         index_var: idx
-      when: num_workers > 0
+      when: num_workers | int > 0
 
 - name: Common node setup
   hosts: masters:workers
@@ -104,7 +104,6 @@
   become: true
   roles:
     - worker
-  when: groups['workers'] | default([]) | length > 0
 
 - name: Fetch kubeconfig to host
   hosts: masters

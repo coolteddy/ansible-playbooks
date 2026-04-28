@@ -1,0 +1,40 @@
+---
+- name: Tear down Kubernetes cluster
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Get all running VMs
+      command: multipass list --format json
+      register: multipass_list
+
+    - name: Find VMs matching cluster name
+      set_fact:
+        vms_to_delete: >-
+          {{ (multipass_list.stdout | from_json).list
+             | map(attribute='name')
+             | select('match', '^' + cluster_name + '-')
+             | list }}
+
+    - name: Abort if no matching VMs found
+      fail:
+        msg: "No VMs found matching '{{ cluster_name }}-*'. Check cluster_name."
+      when: vms_to_delete | length == 0
+
+    - name: Confirm deletion
+      pause:
+        prompt: |
+          About to DELETE these VMs: {{ vms_to_delete | join(', ') }}
+          Also removes: ~/.kube/{{ cluster_name }}-config
+          Press ENTER to confirm, Ctrl+C to cancel
+
+    - name: Delete VMs
+      command: multipass delete {{ item }}
+      loop: "{{ vms_to_delete }}"
+
+    - name: Purge deleted VMs (frees disk)
+      command: multipass purge
+
+    - name: Remove kubeconfig
+      file:
+        path: "~/.kube/{{ cluster_name }}-config"
+        state: absent
